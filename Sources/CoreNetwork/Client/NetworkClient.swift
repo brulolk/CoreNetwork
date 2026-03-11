@@ -18,7 +18,18 @@ public actor NetworkClient {
     
     public func request<T: Decodable>(endpoint: Endpoint, responseType: T.Type) async throws -> NetworkResponse<T> {
         
-        guard let url = URL(string: endpoint.baseURL + endpoint.path) else {
+        /// Usamos URLComponents para montar a URL com segurança
+        guard var components = URLComponents(string: endpoint.baseURL + endpoint.path) else {
+            throw NetworkError.invalidURL
+        }
+                
+        /// Se existirem query params, nós os injetamos aqui
+        if let queryParams = endpoint.queryParams, !queryParams.isEmpty {
+            components.queryItems = queryParams.map { URLQueryItem(name: $0.key, value: $0.value) }
+        }
+                
+        /// Extraímos a URL final e segura
+        guard let url = components.url else {
             throw NetworkError.invalidURL
         }
         
@@ -72,21 +83,5 @@ public actor NetworkClient {
         } catch {
             throw NetworkError.noInternet
         }
-    }
-}
-
-public extension Endpoint {
-    
-    /// Converte um Dicionário em Data de forma limpa
-    func encodeBody(dictionary: [String: Any]) -> Data? {
-        return try? JSONSerialization.data(withJSONObject: dictionary)
-    }
-    
-    /// Converte qualquer Struct/Model que assine Encodable em Data
-    func encodeBody<T: Encodable>(_ model: T) -> Data? {
-        let encoder = JSONEncoder()
-        encoder.keyEncodingStrategy = .convertToSnakeCase
-        
-        return try? encoder.encode(model)
     }
 }
