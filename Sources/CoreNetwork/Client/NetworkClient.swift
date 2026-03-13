@@ -56,13 +56,12 @@ public final class NetworkClient: Sendable {
     }
     
     // MARK: - Camada 2: Conveniência (Com Tipagem Forte)
-    public func request<T: Decodable>(endpoint: Endpoint, responseType: T.Type, maxRetries: Int = 0) async throws -> NetworkResponse<T> {
+    public func request<T: Decodable & Sendable>(endpoint: Endpoint, responseType: T.Type, maxRetries: Int = 0) async throws -> NetworkResponse<T> {
         
         let (data, httpResponse) = try await requestData(endpoint: endpoint, maxRetries: maxRetries)
         
         switch httpResponse.statusCode {
         case 200...299:
-            // Usamos a nossa ferramenta isolada de Decode
             let decodedData = try NetworkDecoder.decode(T.self, from: data)
             let stringHeaders = httpResponse.allHeaderFields as? [String: String] ?? [:]
             return NetworkResponse(data: decodedData, statusCode: httpResponse.statusCode, headers: stringHeaders)

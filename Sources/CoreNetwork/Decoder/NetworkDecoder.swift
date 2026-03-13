@@ -15,7 +15,7 @@ public struct NetworkDecoder: Sendable {
         return decoder
     }
     
-    public static func decode<T: Decodable>(_ type: T.Type, from data: Data) throws -> T {
+    public static func decode<T: Decodable & Sendable>(_ type: T.Type, from data: Data) throws -> T {
         do {
             return try defaultDecoder.decode(T.self, from: data)
         } catch {
