@@ -36,7 +36,7 @@ public actor WebSocketClient {
     /// Envia um dado (geralmente uma String JSON ou Data puro)
     public func send(message: String) async throws {
         guard isConnected, let task = webSocketTask else {
-            throw NetworkError.unknown("WebSocket não está conectado.")
+            throw NetworkError.disconnected
         }
         let message = URLSessionWebSocketTask.Message.string(message)
         try await task.send(message)
