@@ -56,7 +56,7 @@ public final class NetworkClient: Sendable {
     }
     
     // MARK: - Camada 2: Conveniência (Com Tipagem Forte)
-    public func request<T: Decodable & Sendable>(endpoint: Endpoint, responseType: T.Type, maxRetries: Int = 0) async throws -> NetworkResponse<T> {
+    public func request<T: Decodable>(endpoint: Endpoint, responseType: T.Type, maxRetries: Int = 0) async throws -> NetworkResponse<T> {
         
         let (data, httpResponse) = try await requestData(endpoint: endpoint, maxRetries: maxRetries)
         

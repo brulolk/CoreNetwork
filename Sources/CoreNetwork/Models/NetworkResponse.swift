@@ -7,7 +7,7 @@
 
 import Foundation
 
-public struct NetworkResponse<T: Decodable & Sendable>: Sendable {
+public struct NetworkResponse<T: Decodable> {
     public let data: T
     public let statusCode: Int
     public let headers: [String: String]
