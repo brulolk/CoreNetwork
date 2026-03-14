@@ -45,7 +45,16 @@ public final class NetworkClient: Sendable {
             } catch {
                 currentAttempt += 1
                 if currentAttempt > maxRetries {
+                    // 1. Se já for um erro da nossa lib, joga pra frente
                     if let networkError = error as? NetworkError { throw networkError }
+                    
+                    // 2. 🪄 INTERCEPTA O TIMEOUT NATIVO
+                    if let urlError = error as? URLError, urlError.code == .timedOut {
+                        print("⏱️ [NETWORK TIMEOUT]: A requisição excedeu o limite de tempo.")
+                        throw NetworkError.timeout
+                    }
+                    
+                    // 3. Qualquer outro erro cai aqui (falta de internet, dns não resolvido, etc)
                     print("❌ [NETWORK ERROR]: \(error.localizedDescription)")
                     throw NetworkError.noInternet
                 }
@@ -90,6 +99,7 @@ public final class NetworkClient: Sendable {
         endpoint.headers?.forEach { request.setValue($0.value, forHTTPHeaderField: $0.key) }
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
         request.httpBody = endpoint.body
+        request.timeoutInterval = endpoint.timeout ?? 10.0
         
         return request
     }

@@ -22,6 +22,7 @@ public protocol Endpoint {
     var headers: [String: String]? { get }
     var queryParams: [String: String]? { get }
     var body: Data? { get }
+    var timeout: TimeInterval? { get }
 }
 
 public extension Endpoint {
@@ -34,6 +35,10 @@ public extension Endpoint {
     }
     
     var body: Data? {
+        return nil
+    }
+    
+    var timeout: TimeInterval? { // 🆕 Valor padrão opcional
         return nil
     }
 }

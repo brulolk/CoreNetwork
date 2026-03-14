@@ -14,6 +14,7 @@ public enum NetworkError: Error, Equatable {
     case decodingError(Error)
     case noInternet
     case disconnected
+    case timeout
     
     public static func == (lhs: NetworkError, rhs: NetworkError) -> Bool {
         return lhs.localizedDescription == rhs.localizedDescription
