@@ -11,18 +11,20 @@ public final class NetworkClient: Sendable {
     
     public static let shared = NetworkClient()
     private let session: URLSession
+    private let logger: NetworkLogger
     
-    public init(session: URLSession = .shared) {
+    public init(session: URLSession = .shared, logger: NetworkLogger = DefaultNetworkLogger()) {
         self.session = session
+        self.logger = logger
     }
     
     // MARK: - Camada 1: Base Bruta (Controle Total)
     public func requestData(endpoint: Endpoint, maxRetries: Int = 0) async throws -> (Data, HTTPURLResponse) {
-        let request = try buildRequest(from: endpoint)
-        
-        print("\n🚀 [NETWORK REQUEST] \(request.httpMethod ?? "GET") \(request.url?.absoluteString ?? "")")
+        let request = try await buildRequest(from: endpoint)
+ 
+        logger.log("\n🚀 [NETWORK REQUEST] \(request.httpMethod ?? "GET") \(request.url?.absoluteString ?? "")")
         if let body = request.httpBody, let bodyString = String(data: body, encoding: .utf8) {
-            print("📦 [BODY]: \(bodyString)")
+            logger.log("📦 [BODY]: \(bodyString)")
         }
         
         var currentAttempt = 0
@@ -35,9 +37,9 @@ public final class NetworkClient: Sendable {
                     throw NetworkError.badResponse
                 }
                 
-                print("📥 [NETWORK RESPONSE] \(httpResponse.statusCode) \(request.url?.absoluteString ?? "")")
+                logger.log("📥 [NETWORK RESPONSE] \(httpResponse.statusCode) \(request.url?.absoluteString ?? "")")
                 if let jsonString = String(data: data, encoding: .utf8) {
-                    print("📄 [PAYLOAD]: \(jsonString)\n")
+                    logger.log("📄 [PAYLOAD]: \(jsonString)\n")
                 }
                 
                 return (data, httpResponse)
@@ -45,20 +47,18 @@ public final class NetworkClient: Sendable {
             } catch {
                 currentAttempt += 1
                 if currentAttempt > maxRetries {
-                    // 1. Se já for um erro da nossa lib, joga pra frente
                     if let networkError = error as? NetworkError { throw networkError }
                     
-                    // 2. 🪄 INTERCEPTA O TIMEOUT NATIVO
                     if let urlError = error as? URLError, urlError.code == .timedOut {
-                        print("⏱️ [NETWORK TIMEOUT]: A requisição excedeu o limite de tempo.")
+                        logger.log("⏱️ [NETWORK TIMEOUT]: A requisição excedeu o limite de tempo.")
                         throw NetworkError.timeout
                     }
-                    
-                    // 3. Qualquer outro erro cai aqui (falta de internet, dns não resolvido, etc)
-                    print("❌ [NETWORK ERROR]: \(error.localizedDescription)")
+                  
+                    logger.log("❌ [NETWORK ERROR]: \(error.localizedDescription)")
                     throw NetworkError.noInternet
                 }
-                print("🔄 [RETRY] Tentativa \(currentAttempt) de \(maxRetries)...")
+     
+                logger.log("🔄 [RETRY] Tentativa \(currentAttempt) de \(maxRetries)...")
                 try? await Task.sleep(nanoseconds: 1_000_000_000)
             }
         }
@@ -66,7 +66,6 @@ public final class NetworkClient: Sendable {
     
     // MARK: - Camada 2: Conveniência (Com Tipagem Forte)
     public func request<T: Decodable>(endpoint: Endpoint, responseType: T.Type, maxRetries: Int = 0) async throws -> NetworkResponse<T> {
-        
         let (data, httpResponse) = try await requestData(endpoint: endpoint, maxRetries: maxRetries)
         
         switch httpResponse.statusCode {
@@ -74,14 +73,13 @@ public final class NetworkClient: Sendable {
             let decodedData = try NetworkDecoder.decode(T.self, from: data)
             let stringHeaders = httpResponse.allHeaderFields as? [String: String] ?? [:]
             return NetworkResponse(data: decodedData, statusCode: httpResponse.statusCode, headers: stringHeaders)
-            
         default:
             throw NetworkError.serverError(statusCode: httpResponse.statusCode, data: data)
         }
     }
     
     // MARK: - Método Privado de Construção
-    private func buildRequest(from endpoint: Endpoint) throws -> URLRequest {
+    private func buildRequest(from endpoint: Endpoint) async throws -> URLRequest {
         guard var components = URLComponents(string: endpoint.baseURL + endpoint.path) else {
             throw NetworkError.invalidURL
         }
@@ -96,10 +94,19 @@ public final class NetworkClient: Sendable {
         
         var request = URLRequest(url: url)
         request.httpMethod = endpoint.method.rawValue
+        
+        // 1. Aplica headers globais primeiro (prioridade menor)
+        let configHeaders = await NetworkConfig.shared.globalHeaders
+        configHeaders.forEach { request.setValue($0.value, forHTTPHeaderField: $0.key) }
+        
+        // 2. Aplica headers do endpoint (sobrescrevem os globais)
         endpoint.headers?.forEach { request.setValue($0.value, forHTTPHeaderField: $0.key) }
+        
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
         request.httpBody = endpoint.body
-        request.timeoutInterval = endpoint.timeout ?? 10.0
+        
+        let defaultTimeout = await NetworkConfig.shared.defaultTimeout
+        request.timeoutInterval = endpoint.timeout ?? defaultTimeout
         
         return request
     }

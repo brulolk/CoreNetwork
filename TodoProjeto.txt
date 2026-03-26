@@ -1,0 +1,706 @@
+
+// ARQUIVO: ./Tests/CoreNetworkTests/Mocks/MockURLProtocol.swift
+
+//
+//  MockURLProtocol.swift
+//  CoreNetwork
+//
+//  Created by Bruno Vinicius on 09/03/26.
+//
+
+import Foundation
+
+// Essa classe intercepta qualquer chamada de rede que passe por ela
+class MockURLProtocol: URLProtocol {
+    
+    nonisolated(unsafe) static var mockData: Data?
+    nonisolated(unsafe) static var mockResponse: URLResponse?
+    nonisolated(unsafe) static var mockError: Error?
+    
+    override class func canInit(with request: URLRequest) -> Bool {
+        return true // Dizemos para o iOS: "Deixa que eu cuido de todas as requisições"
+    }
+    
+    override class func canonicalRequest(for request: URLRequest) -> URLRequest {
+        return request
+    }
+    
+    override func startLoading() {
+        if let error = MockURLProtocol.mockError {
+            client?.urlProtocol(self, didFailWithError: error)
+        } else {
+            if let response = MockURLProtocol.mockResponse {
+                client?.urlProtocol(self, didReceive: response, cacheStoragePolicy: .notAllowed)
+            }
+            if let data = MockURLProtocol.mockData {
+                client?.urlProtocol(self, didLoad: data)
+            }
+        }
+        client?.urlProtocolDidFinishLoading(self)
+    }
+    
+    override func stopLoading() {}
+}
+
+// ARQUIVO: ./Tests/CoreNetworkTests/CoreNetworkTests.swift
+
+import XCTest
+@testable import CoreNetwork
+
+final class CoreNetworkTests: XCTestCase {
+    
+    var client: NetworkClient!
+    
+    // Um Endpoint falso só para testes
+    struct MockEndpoint: Endpoint {
+        var baseURL: String = "https://api.test.com"
+        var path: String = "/users"
+        var method: HTTPMethod = .get
+    }
+    
+    // Um modelo falso para decodificar
+    struct MockUser: Decodable, Equatable, Sendable {
+        let name: String
+    }
+
+    override func setUp() {
+        super.setUp()
+        
+        // 1. Criamos uma configuração de sessão que usa o nosso interceptador (MockURLProtocol)
+        let config = URLSessionConfiguration.ephemeral
+        config.protocolClasses = [MockURLProtocol.self]
+        let mockSession = URLSession(configuration: config)
+        
+        // 2. Injetamos a sessão falsa no nosso Client
+        client = NetworkClient(session: mockSession)
+    }
+    
+    override func tearDown() {
+        MockURLProtocol.mockData = nil
+        MockURLProtocol.mockResponse = nil
+        MockURLProtocol.mockError = nil
+        super.tearDown()
+    }
+
+    func testRequest_WhenStatusCodeIs200_ShouldDecodeCorrectly() async throws {
+        // Arrange (Preparação)
+        let jsonString = """
+        { "name": "Satoru Gojo" }
+        """
+        MockURLProtocol.mockData = jsonString.data(using: .utf8)
+        MockURLProtocol.mockResponse = HTTPURLResponse(
+            url: URL(string: "https://api.test.com/users")!,
+            statusCode: 200,
+            httpVersion: nil,
+            headerFields: ["x-custom-header": "test-value"]
+        )
+        
+        // Act (Ação)
+        let response = try await client.request(endpoint: MockEndpoint(), responseType: MockUser.self)
+        
+        // Assert (Verificação)
+        XCTAssertEqual(response.statusCode, 200)
+        XCTAssertEqual(response.data.name, "Satoru Gojo")
+        XCTAssertEqual(response.valueForHeader("x-custom-header"), "test-value")
+    }
+}
+
+// ARQUIVO: ./Package.swift
+
+// swift-tools-version: 6.2
+// The swift-tools-version declares the minimum version of Swift required to build this package.
+
+import PackageDescription
+
+let package = Package(
+    name: "CoreNetwork",
+    platforms: [
+        .iOS(.v15),
+        .macOS(.v12)
+    ],
+    products: [
+        // Products define the executables and libraries a package produces, making them visible to other packages.
+        .library(
+            name: "CoreNetwork",
+            targets: ["CoreNetwork"]
+        ),
+    ],
+    targets: [
+        // Targets are the basic building blocks of a package, defining a module or a test suite.
+        // Targets can depend on other targets in this package and products from dependencies.
+        .target(
+            name: "CoreNetwork"
+        ),
+        .testTarget(
+            name: "CoreNetworkTests",
+            dependencies: ["CoreNetwork"]
+        ),
+    ]
+)
+
+// ARQUIVO: ./Sources/CoreNetwork/Decoder/NetworkDecoder.swift
+
+//
+//  NetworkDecoder.swift
+//  CoreNetwork
+//
+//  Created by Bruno Vinicius on 13/03/26.
+//
+
+import Foundation
+
+public struct NetworkDecoder: Sendable {
+    
+    public static var defaultDecoder: JSONDecoder {
+        let decoder = JSONDecoder()
+        decoder.keyDecodingStrategy = .convertFromSnakeCase
+        return decoder
+    }
+    
+    public static func decode<T: Decodable>(_ type: T.Type, from data: Data) throws -> T {
+        do {
+            return try defaultDecoder.decode(T.self, from: data)
+        } catch {
+            print("❌ [DECODE ERROR]: Falha ao converter para \(String(describing: T.self)). Erro: \(error)")
+            throw NetworkError.decodingError(error)
+        }
+    }
+}
+
+// ARQUIVO: ./Sources/CoreNetwork/Models/NetworkResponse.swift
+
+//
+//  NetworkResponse.swift
+//  CoreNetwork
+//
+//  Created by Bruno Vinicius on 09/03/26.
+//
+
+import Foundation
+
+public struct NetworkResponse<T: Decodable> {
+    public let data: T
+    public let statusCode: Int
+    public let headers: [String: String]
+    
+    public init(data: T, statusCode: Int, headers: [String: String]) {
+        self.data = data
+        self.statusCode = statusCode
+        self.headers = headers
+    }
+    
+    /// Helper para extrair um header específico facilmente (ex: "x-pagination-count")
+    public func valueForHeader(_ key: String) -> String? {
+        // Busca ignorando maiúsculas e minúsculas
+        return headers.first { $0.key.caseInsensitiveCompare(key) == .orderedSame }?.value
+    }
+}
+
+// ARQUIVO: ./Sources/CoreNetwork/Models/NetworkError.swift
+
+//
+//  NetworkError.swift
+//  CoreNetwork
+//
+//  Created by Bruno Vinicius on 09/03/26.
+//
+
+import Foundation
+
+public enum NetworkError: Error, Equatable, Sendable {
+    case invalidURL
+    case badResponse
+    case serverError(statusCode: Int, data: Data?)
+    case decodingError(Error)
+    case noInternet
+    case disconnected
+    case timeout
+    
+    public static func == (lhs: NetworkError, rhs: NetworkError) -> Bool {
+        switch (lhs, rhs) {
+        case (.invalidURL, .invalidURL): return true
+        case (.badResponse, .badResponse): return true
+        case (.noInternet, .noInternet): return true
+        case (.disconnected, .disconnected): return true
+        case (.timeout, .timeout): return true
+        case (.serverError(let a, _), .serverError(let b, _)): return a == b
+        case (.decodingError(let a), .decodingError(let b)):
+            // Comparamos o domínio e código do erro interno para garantir equidade
+            return (a as NSError).domain == (b as NSError).domain && (a as NSError).code == (b as NSError).code
+        default: return false
+        }
+    }
+}
+
+// ARQUIVO: ./Sources/CoreNetwork/Models/Endpoint.swift
+
+//
+//  Endpoint.swift
+//  CoreNetwork
+//
+//  Created by Bruno Vinicius on 09/03/26.
+//
+
+import Foundation
+
+public enum HTTPMethod: String {
+    case get = "GET"
+    case post = "POST"
+    case put = "PUT"
+    case delete = "DELETE"
+    case patch = "PATCH"
+}
+
+public protocol Endpoint {
+    var baseURL: String { get }
+    var path: String { get }
+    var method: HTTPMethod { get }
+    var headers: [String: String]? { get }
+    var queryParams: [String: String]? { get }
+    var body: Data? { get }
+    var timeout: TimeInterval? { get }
+}
+
+public extension Endpoint {
+    var headers: [String: String]? {
+        return ["Content-Type": "application/json"]
+    }
+    
+    var queryParams: [String: String]? {
+        return nil
+    }
+    
+    var body: Data? {
+        return nil
+    }
+    
+    var timeout: TimeInterval? { // 🆕 Valor padrão opcional
+        return nil
+    }
+}
+
+public extension Endpoint {
+    /// Converte um Dicionário em Data de forma limpa
+    func encodeBody(dictionary: [String: Any]) -> Data? {
+        return try? JSONSerialization.data(withJSONObject: dictionary)
+    }
+    
+    /// Converte qualquer Struct/Model que assine Encodable em Data
+    func encodeBody<T: Encodable>(_ model: T) -> Data? {
+        let encoder = JSONEncoder()
+        encoder.keyEncodingStrategy = .convertToSnakeCase
+        
+        return try? encoder.encode(model)
+    }
+}
+
+// ARQUIVO: ./Sources/CoreNetwork/Confg/NetworkConfig.swift
+
+//
+//  NetworkConfig.swift
+//  CoreNetwork
+//
+//  Created by Bruno Vinicius on 09/03/26.
+//
+
+import Foundation
+
+public actor NetworkConfig {
+    public static let shared = NetworkConfig()
+    
+    /// Headers que serão anexados a TODAS as requisições (ex: Authorization, App-Version)
+    public var globalHeaders: [String: String] = [:]
+    
+    /// O timeout padrão para as requisições
+    public var defaultTimeout: TimeInterval = 30.0
+    
+    private init() {}
+    
+    public func addGlobalHeader(name: String, value: String) {
+        globalHeaders[name] = value
+    }
+    
+    public func removeGlobalHeader(name: String) {
+        globalHeaders.removeValue(forKey: name)
+    }
+    
+    /// Limpa todos os headers globais de uma só vez (útil no logout)
+    public func clearGlobalHeaders() {
+        globalHeaders = [:]
+    }
+}
+ 
+
+// ARQUIVO: ./Sources/CoreNetwork/Client/NetworkClient.swift
+
+//
+//  NetworkClient.swift
+//  CoreNetwork
+//
+//  Created by Bruno Vinicius on 09/03/26.
+//
+
+import Foundation
+
+public final class NetworkClient: Sendable {
+    
+    public static let shared = NetworkClient()
+    private let session: URLSession
+    private let logger: NetworkLogger
+    
+    public init(session: URLSession = .shared, logger: NetworkLogger = DefaultNetworkLogger()) {
+        self.session = session
+        self.logger = logger
+    }
+    
+    // MARK: - Camada 1: Base Bruta (Controle Total)
+    public func requestData(endpoint: Endpoint, maxRetries: Int = 0) async throws -> (Data, HTTPURLResponse) {
+        let request = try await buildRequest(from: endpoint)
+ 
+        logger.log("\n🚀 [NETWORK REQUEST] \(request.httpMethod ?? "GET") \(request.url?.absoluteString ?? "")")
+        if let body = request.httpBody, let bodyString = String(data: body, encoding: .utf8) {
+            logger.log("📦 [BODY]: \(bodyString)")
+        }
+        
+        var currentAttempt = 0
+        
+        while true {
+            do {
+                let (data, response) = try await session.data(for: request)
+                
+                guard let httpResponse = response as? HTTPURLResponse else {
+                    throw NetworkError.badResponse
+                }
+                
+                logger.log("📥 [NETWORK RESPONSE] \(httpResponse.statusCode) \(request.url?.absoluteString ?? "")")
+                if let jsonString = String(data: data, encoding: .utf8) {
+                    logger.log("📄 [PAYLOAD]: \(jsonString)\n")
+                }
+                
+                return (data, httpResponse)
+                
+            } catch {
+                currentAttempt += 1
+                if currentAttempt > maxRetries {
+                    if let networkError = error as? NetworkError { throw networkError }
+                    
+                    if let urlError = error as? URLError, urlError.code == .timedOut {
+                        logger.log("⏱️ [NETWORK TIMEOUT]: A requisição excedeu o limite de tempo.")
+                        throw NetworkError.timeout
+                    }
+                  
+                    logger.log("❌ [NETWORK ERROR]: \(error.localizedDescription)")
+                    throw NetworkError.noInternet
+                }
+     
+                logger.log("🔄 [RETRY] Tentativa \(currentAttempt) de \(maxRetries)...")
+                try? await Task.sleep(nanoseconds: 1_000_000_000)
+            }
+        }
+    }
+    
+    // MARK: - Camada 2: Conveniência (Com Tipagem Forte)
+    public func request<T: Decodable>(endpoint: Endpoint, responseType: T.Type, maxRetries: Int = 0) async throws -> NetworkResponse<T> {
+        let (data, httpResponse) = try await requestData(endpoint: endpoint, maxRetries: maxRetries)
+        
+        switch httpResponse.statusCode {
+        case 200...299:
+            let decodedData = try NetworkDecoder.decode(T.self, from: data)
+            let stringHeaders = httpResponse.allHeaderFields as? [String: String] ?? [:]
+            return NetworkResponse(data: decodedData, statusCode: httpResponse.statusCode, headers: stringHeaders)
+        default:
+            throw NetworkError.serverError(statusCode: httpResponse.statusCode, data: data)
+        }
+    }
+    
+    // MARK: - Método Privado de Construção
+    private func buildRequest(from endpoint: Endpoint) async throws -> URLRequest {
+        guard var components = URLComponents(string: endpoint.baseURL + endpoint.path) else {
+            throw NetworkError.invalidURL
+        }
+        
+        if let queryParams = endpoint.queryParams, !queryParams.isEmpty {
+            components.queryItems = queryParams.map { URLQueryItem(name: $0.key, value: $0.value) }
+        }
+        
+        guard let url = components.url else {
+            throw NetworkError.invalidURL
+        }
+        
+        var request = URLRequest(url: url)
+        request.httpMethod = endpoint.method.rawValue
+        
+        // 1. Aplica headers globais primeiro (prioridade menor)
+        let configHeaders = await NetworkConfig.shared.globalHeaders
+        configHeaders.forEach { request.setValue($0.value, forHTTPHeaderField: $0.key) }
+        
+        // 2. Aplica headers do endpoint (sobrescrevem os globais)
+        endpoint.headers?.forEach { request.setValue($0.value, forHTTPHeaderField: $0.key) }
+        
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.httpBody = endpoint.body
+        
+        let defaultTimeout = await NetworkConfig.shared.defaultTimeout
+        request.timeoutInterval = endpoint.timeout ?? defaultTimeout
+        
+        return request
+    }
+}
+
+// ARQUIVO: ./Sources/CoreNetwork/Client/BackgroundTransferClient.swift
+
+//
+//  BackgroundTransferClient.swift
+//  CoreNetwork
+//
+//  Created by Bruno Vinicius on 11/03/26.
+//
+
+import Foundation
+
+// Precisa ser uma NSObject para herdar os métodos de Delegate do URLSession
+public class BackgroundTransferClient: NSObject, URLSessionTaskDelegate, @unchecked Sendable {
+    
+    public static let shared = BackgroundTransferClient()
+    private var session: URLSession!
+    
+    /// Callback moderno para notificar conclusão de download
+    public var onDownloadCompleted: ((URL) -> Void)?
+    
+    /// Callback moderno para notificar status de upload
+    public var onUploadCompleted: ((URLSessionTask, Error?) -> Void)?
+
+    private override init() {
+        super.init()
+        setupSession(bundleIdentifier: "com.corenetwork.backgroundTransfer")
+    }
+
+    public convenience init(bundleIdentifier: String = "com.corenetwork.backgroundTransfer") {
+        self.init()
+        setupSession(bundleIdentifier: bundleIdentifier)
+    }
+
+    private func setupSession(bundleIdentifier: String) {
+        let config = URLSessionConfiguration.background(withIdentifier: bundleIdentifier)
+        config.isDiscretionary = false
+        self.session = URLSession(configuration: config, delegate: self, delegateQueue: nil)
+    }
+    
+    /// O arquivo DEVE estar salvo fisicamente no disco do iPhone (fileURL)
+    public func upload(fileURL: URL, to endpoint: Endpoint) throws {
+        guard let url = URL(string: endpoint.baseURL + endpoint.path) else {
+            throw NetworkError.invalidURL
+        }
+        
+        var request = URLRequest(url: url)
+        request.httpMethod = endpoint.method.rawValue
+        endpoint.headers?.forEach { request.setValue($0.value, forHTTPHeaderField: $0.key) }
+        
+        let task = session.uploadTask(with: request, fromFile: fileURL)
+        task.resume()
+    }
+    
+    /// Inicia o download de um arquivo grande mesmo com o app em background
+    public func download(from endpoint: Endpoint) throws {
+        guard let url = URL(string: endpoint.baseURL + endpoint.path) else {
+            throw NetworkError.invalidURL
+        }
+        
+        var request = URLRequest(url: url)
+        request.httpMethod = HTTPMethod.get.rawValue
+        endpoint.headers?.forEach { request.setValue($0.value, forHTTPHeaderField: $0.key) }
+        
+        let task = session.downloadTask(with: request)
+        task.resume()
+    }
+
+    // MARK: - URLSessionTaskDelegate
+    public func urlSession(_ session: URLSession, task: URLSessionTask, didCompleteWithError error: Error?) {
+        onUploadCompleted?(task, error)
+    }
+}
+
+// MARK: - URLSessionDownloadDelegate
+extension BackgroundTransferClient: URLSessionDownloadDelegate {
+    
+    public func urlSession(_ session: URLSession, downloadTask: URLSessionDownloadTask, didFinishDownloadingTo location: URL) {
+        
+        let suggestedFilename = downloadTask.response?.suggestedFilename ?? "downloaded_file"
+        
+        guard let documentsDirectory = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask).first else {
+            return
+        }
+        
+        let destinationURL = documentsDirectory.appendingPathComponent(suggestedFilename)
+        
+        do {
+            if FileManager.default.fileExists(atPath: destinationURL.path) { 
+                try FileManager.default.removeItem(at: destinationURL)
+            }
+            
+            try FileManager.default.moveItem(at: location, to: destinationURL)
+            
+            // Notifica via closure moderno e via NotificationCenter legado [cite: 59]
+            onDownloadCompleted?(destinationURL)
+            NotificationCenter.default.post(name: NSNotification.Name("DownloadCompleted"), object: destinationURL)
+            
+        } catch {
+            print("❌ Erro ao salvar o arquivo de download: \(error)")
+        }
+    }
+}
+
+// ARQUIVO: ./Sources/CoreNetwork/Client/WebSocketClient.swift
+
+//
+//  WebSocketClient.swift
+//  CoreNetwork
+//
+//  Created by Bruno Vinicius on 11/03/26.
+//
+
+import Foundation
+
+public actor WebSocketClient {
+    private var webSocketTask: URLSessionWebSocketTask?
+    private var isConnected = false
+    private var pingTask: Task<Void, Never>?
+
+    public init() {}
+    
+    /// Abre o "tubo" de comunicação e aguarda confirmação básica de atividade
+    public func connect(to urlString: String, pingInterval: TimeInterval = 25.0) async throws {
+        guard let url = URL(string: urlString) else { throw NetworkError.invalidURL }
+        
+        webSocketTask = URLSession.shared.webSocketTask(with: url)
+        webSocketTask?.resume()
+        isConnected = true
+        
+        // Timeout de 5 segundos para garantir que a task está ativa
+        try await Task.sleep(nanoseconds: 5_000_000_000)
+        
+        startPinging(interval: pingInterval)
+    }
+    
+    /// Fecha a conexão de forma limpa
+    public func disconnect() {
+        pingTask?.cancel()
+        webSocketTask?.cancel(with: .goingAway, reason: nil)
+        isConnected = false
+    }
+    
+    /// Envia uma mensagem de texto
+    public func send(message: String) async throws {
+        guard isConnected, let task = webSocketTask else {
+            throw NetworkError.disconnected
+        }
+        let message = URLSessionWebSocketTask.Message.string(message)
+        try await task.send(message)
+    }
+
+    /// Envia dados binários (necessário para telemetria ou arquivos)
+    public func send(data: Data) async throws {
+        guard isConnected, let task = webSocketTask else {
+            throw NetworkError.disconnected
+        }
+        let message = URLSessionWebSocketTask.Message.data(data)
+        try await task.send(message)
+    }
+    
+    /// Escuta mensagens de texto via AsyncStream [cite: 65]
+    public func listen() -> AsyncStream<String> {
+        AsyncStream { continuation in
+            Task {
+                await receiveLoop(continuation: continuation)
+            }
+        }
+    }
+
+    /// Escuta mensagens binárias via AsyncStream
+    public func listenData() -> AsyncStream<Data> {
+        AsyncStream { continuation in
+            Task {
+                while isConnected, let task = webSocketTask {
+                    do {
+                        let message = try await task.receive()
+                        if case .data(let data) = message {
+                            continuation.yield(data)
+                        }
+                    } catch {
+                        break
+                    }
+                }
+                continuation.finish()
+            }
+        }
+    }
+    
+    private func receiveLoop(continuation: AsyncStream<String>.Continuation) async {
+        guard isConnected, let task = webSocketTask else {
+            continuation.finish()
+            return
+        }
+        
+        do {
+            let message = try await task.receive()
+            switch message {
+            case .string(let text):
+                continuation.yield(text)
+            case .data(let data):
+                if let text = String(data: data, encoding: .utf8) {
+                    continuation.yield(text)
+                }
+            @unknown default:
+                break
+            }
+            await receiveLoop(continuation: continuation)
+        } catch {
+            continuation.finish()
+        }
+    }
+    
+    private func startPinging(interval: TimeInterval) {
+        pingTask?.cancel()
+        pingTask = Task {
+            while isConnected && !Task.isCancelled {
+                let nanoseconds = UInt64(interval * 1_000_000_000)
+                try? await Task.sleep(nanoseconds: nanoseconds)
+                
+                webSocketTask?.sendPing { error in
+                    if let error = error {
+                        print("Falha no Ping do WebSocket: \(error.localizedDescription)")
+                    }
+                }
+            }
+        }
+    }
+}
+
+// ARQUIVO: ./Sources/CoreNetwork/Client/NetworkLogger.swift
+
+//
+//  NetworkLogger.swift
+//  CoreNetwork
+//
+//  Created by Bruno Vinicius on 26/03/26.
+//
+
+import Foundation
+
+public protocol NetworkLogger: Sendable {
+    func log(_ message: String)
+}
+
+public struct DefaultNetworkLogger: NetworkLogger {
+    public init() {}
+    public func log(_ message: String) {
+        #if DEBUG
+        print(message)
+        #endif
+    }
+}
+
+public struct SilentNetworkLogger: NetworkLogger {
+    public init() {}
+    public func log(_ message: String) {}
+}

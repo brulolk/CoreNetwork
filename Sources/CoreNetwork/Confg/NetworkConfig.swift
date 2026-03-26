@@ -25,5 +25,10 @@ public actor NetworkConfig {
     public func removeGlobalHeader(name: String) {
         globalHeaders.removeValue(forKey: name)
     }
+    
+    /// Limpa todos os headers globais de uma só vez (útil no logout)
+    public func clearGlobalHeaders() {
+        globalHeaders = [:]
+    }
 }
  

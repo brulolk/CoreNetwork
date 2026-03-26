@@ -1,7 +1,10 @@
 
----
-
 # 📦 CoreNetwork
+
+![Swift](https://img.shields.io/badge/Swift-6.0-orange)
+![Platform](https://img.shields.io/badge/iOS-15%2B-blue)
+![Platform](https://img.shields.io/badge/macOS-12%2B-lightgrey)
+![SPM](https://img.shields.io/badge/SPM-compatible-brightgreen)
 
 Camada de networking moderna, leve e tipada para iOS/macOS baseada em **Swift Concurrency (async/await)**.
 
@@ -15,9 +18,11 @@ Projetada para simplificar chamadas HTTP, WebSocket e transferências em backgro
 * Tipagem forte com `Decodable`
 * Retry automático configurável
 * Tratamento de erros padronizado
-* Headers globais
+* Headers globais configuráveis
+* Timeout global configurável
+* Logger configurável
 * Upload/Download em background
-* WebSocket com `AsyncStream`
+* WebSocket (text + binary)
 * Fácil de testar
 * Estrutura baseada em `Endpoint`
 
@@ -43,9 +48,9 @@ dependencies: [
 
 ---
 
-## 🚀 Uso rápido
+# 🚀 Uso rápido
 
-### 1. Criando um Endpoint
+## Criando um Endpoint
 
 ```swift
 struct GetUsersEndpoint: Endpoint {
@@ -57,7 +62,7 @@ struct GetUsersEndpoint: Endpoint {
 
 ---
 
-### 2. Fazendo uma requisição
+## Fazendo uma requisição
 
 ```swift
 let client = NetworkClient()
@@ -68,16 +73,6 @@ let response = try await client.request(
 )
 
 print(response.data)
-```
-
----
-
-### 3. Acessando headers e status code
-
-```swift
-print(response.statusCode)
-
-let pagination = response.valueForHeader("x-pagination-count")
 ```
 
 ---
@@ -94,7 +89,9 @@ let response = try await client.request(
 
 ---
 
-## 🌐 Headers globais
+# 🌐 Configuração Global
+
+## Headers Globais
 
 ```swift
 await NetworkConfig.shared.addGlobalHeader(
@@ -103,9 +100,31 @@ await NetworkConfig.shared.addGlobalHeader(
 )
 ```
 
+Remover header:
+
+```swift
+await NetworkConfig.shared.removeGlobalHeader(name: "Authorization")
+```
+
+Limpar todos (ex: logout):
+
+```swift
+await NetworkConfig.shared.clearGlobalHeaders()
+```
+
 ---
 
-## 🧠 Tratamento de erros
+## Timeout Global
+
+```swift
+await NetworkConfig.shared.defaultTimeout = 60
+```
+
+Timeout por endpoint ainda tem prioridade.
+
+---
+
+# 🧠 Tratamento de erros
 
 ```swift
 do {
@@ -120,6 +139,8 @@ do {
         print("Timeout")
     case .noInternet:
         print("No internet")
+    case .disconnected:
+        print("WebSocket disconnected")
     default:
         break
     }
@@ -128,37 +149,92 @@ do {
 
 ---
 
-## 🔄 Upload / Download em Background
+# 🪵 Logger
+
+Por padrão logs só aparecem em DEBUG.
 
 ```swift
-try BackgroundTransferClient.shared.upload(
-    fileURL: fileURL,
-    to: endpoint
+let client = NetworkClient(
+    logger: DefaultNetworkLogger()
 )
+```
 
-try BackgroundTransferClient.shared.download(
-    from: endpoint
+Desabilitar logs:
+
+```swift
+let client = NetworkClient(
+    logger: SilentNetworkLogger()
 )
+```
+
+Criar logger custom:
+
+```swift
+struct MyLogger: NetworkLogger {
+    func log(_ message: String) {
+        print("NETWORK:", message)
+    }
+}
 ```
 
 ---
 
-## 🔌 WebSocket
+# 🔄 Upload / Download em Background
 
-### Conectar
+```swift
+let client = BackgroundTransferClient.shared
+
+client.onDownloadCompleted = { url in
+    print("Downloaded:", url)
+}
+
+client.onUploadCompleted = { task, error in
+    print("Upload finished")
+}
+```
+
+Upload:
+
+```swift
+try client.upload(fileURL: fileURL, to: endpoint)
+```
+
+Download:
+
+```swift
+try client.download(from: endpoint)
+```
+
+---
+
+# 🔌 WebSocket
+
+## Conectar
 
 ```swift
 let socket = WebSocketClient()
 try await socket.connect(to: "wss://example.com/socket")
 ```
 
-### Enviar mensagem
+---
+
+## Enviar texto
 
 ```swift
-try await socket.send(message: "Hello")
+try await socket.send(message: "hello")
 ```
 
-### Escutar mensagens
+---
+
+## Enviar binário
+
+```swift
+try await socket.send(data: data)
+```
+
+---
+
+## Escutar texto
 
 ```swift
 for await message in socket.listen() {
@@ -168,11 +244,27 @@ for await message in socket.listen() {
 
 ---
 
-## 🧪 Testabilidade
+## Escutar dados binários
 
-A biblioteca foi projetada para ser facilmente testável através da injeção de `URLSession`.
+```swift
+for await data in socket.listenData() {
+    print(data)
+}
+```
 
-Você pode criar uma sessão customizada com `URLProtocol` para mockar respostas:
+---
+
+## Desconectar
+
+```swift
+socket.disconnect()
+```
+
+---
+
+# 🧪 Testabilidade
+
+A biblioteca suporta injeção de `URLSession` para mocks.
 
 ```swift
 let config = URLSessionConfiguration.ephemeral
@@ -182,40 +274,30 @@ let session = URLSession(configuration: config)
 let client = NetworkClient(session: session)
 ```
 
----
+Implementação de exemplo disponível nos testes da lib.
 
-## 🧰 Helpers
-
-### Encode de Body
-
-```swift
-let data = endpoint.encodeBody(model)
-```
-
-ou
-
-```swift
-let data = endpoint.encodeBody(dictionary: ["key": "value"])
-```
 
 ---
 
-## 📌 Boas práticas
+# 📌 Boas práticas
 
 * Criar um `Endpoint` por recurso
-* Centralizar autenticação via `NetworkConfig`
+* Centralizar autenticação no `NetworkConfig`
+* Usar logger custom em produção
+* Evitar retry excessivo
 * Tratar erros explicitamente
-* Usar retry apenas para falhas transitórias
 
 ---
 
-## 🔒 Contribuição
+# 🔒 Contribuição
 
-Esta biblioteca é mantida internamente.
-Sugestões e melhorias podem ser propostas via issue.
+Esta biblioteca é mantida de forma centralizada.
+Sugestões podem ser enviadas via issue.
 
 ---
 
-## 📄 Licença
+# 📄 Licença
 
 Uso livre para integração em projetos.
+
+---
