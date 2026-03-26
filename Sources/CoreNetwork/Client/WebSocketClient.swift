@@ -53,7 +53,7 @@ public actor WebSocketClient {
         try await task.send(message)
     }
     
-    /// Escuta mensagens de texto via AsyncStream [cite: 65]
+    /// Escuta mensagens de texto via AsyncStream
     public func listen() -> AsyncStream<String> {
         AsyncStream { continuation in
             Task {

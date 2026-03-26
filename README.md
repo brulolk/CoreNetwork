@@ -112,6 +112,8 @@ Limpar todos (ex: logout):
 await NetworkConfig.shared.clearGlobalHeaders()
 ```
 
+📌 Headers definidos no `Endpoint` possuem prioridade sobre os globais.
+
 ---
 
 ## Timeout Global
@@ -120,7 +122,7 @@ await NetworkConfig.shared.clearGlobalHeaders()
 await NetworkConfig.shared.defaultTimeout = 60
 ```
 
-Timeout por endpoint ainda tem prioridade.
+Timeout definido no `Endpoint` possui prioridade sobre o global.
 
 ---
 
@@ -181,9 +183,24 @@ struct MyLogger: NetworkLogger {
 
 # 🔄 Upload / Download em Background
 
+### Usando instância compartilhada
+
 ```swift
 let client = BackgroundTransferClient.shared
+```
 
+### Criando instância custom (recomendado para apps maiores)
+
+```swift
+let client = BackgroundTransferClient(
+    bundleIdentifier: "com.myapp.background",
+    logger: DefaultNetworkLogger()
+)
+```
+
+### Callbacks
+
+```swift
 client.onDownloadCompleted = { url in
     print("Downloaded:", url)
 }
@@ -193,13 +210,13 @@ client.onUploadCompleted = { task, error in
 }
 ```
 
-Upload:
+### Upload
 
 ```swift
 try client.upload(fileURL: fileURL, to: endpoint)
 ```
 
-Download:
+### Download
 
 ```swift
 try client.download(from: endpoint)
@@ -274,8 +291,7 @@ let session = URLSession(configuration: config)
 let client = NetworkClient(session: session)
 ```
 
-Implementação de exemplo disponível nos testes da lib.
-
+Exemplo completo disponível nos testes da biblioteca. 
 
 ---
 
